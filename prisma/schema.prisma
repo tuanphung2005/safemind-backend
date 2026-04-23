@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Emotion {
+  HAPPY
+  SAD
+  ANGRY
+  ANXIOUS
+  NEUTRAL
+}
+
+enum SosLevel {
+  LEVEL1
+  LEVEL2
+  LEVEL3
+}
+
+enum GameRole {
+  SUPPORTER
+  BYSTANDER
+  DEFENDER
+}
+
+enum RecommendationType {
+  PLAY_GAME
+  SOS_CHECK
+  MICRO_ACTION
+  NONE
+}
+
+model UserProfile {
+  id                   String                @id @default(cuid())
+  anonymousId          String                @unique
+  deviceHash           String
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  emotionCheckins      EmotionCheckin[]
+  sosReports           SosReport[]
+  gameResults          GameResult[]
+  recommendationEvents RecommendationEvent[]
+
+  @@index([createdAt(sort: Desc)])
+}
+
+model EmotionCheckin {
+  id             String      @id @default(cuid())
+  userId         String
+  user           UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emotion        Emotion
+  reasons        String[]    @default([])
+  customReason   String?
+  reflectionText String
+  microAction    String?
+  createdAt      DateTime    @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([emotion, createdAt(sort: Desc)])
+}
+
+model SosReport {
+  id              String      @id @default(cuid())
+  userId          String
+  user            UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  situation       String
+  level           SosLevel
+  matchedKeywords String[]    @default([])
+  guidance        String
+  showHotline     Boolean     @default(false)
+  escalated       Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([level, createdAt(sort: Desc)])
+}
+
+model GameScenario {
+  id            String               @id @default(cuid())
+  title         String
+  description   String
+  isAiGenerated Boolean              @default(false)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  choices       GameScenarioChoice[]
+  results       GameResult[]
+
+  @@index([createdAt(sort: Desc)])
+}
+
+model GameScenarioChoice {
+  id         String       @id @default(cuid())
+  scenarioId String
+  scenario   GameScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  text       String
+  role       GameRole
+  feedback   String
+  createdAt  DateTime     @default(now())
+  results    GameResult[]
+
+  @@index([scenarioId])
+}
+
+model GameResult {
+  id          String             @id @default(cuid())
+  userId      String
+  user        UserProfile        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scenarioId  String
+  scenario    GameScenario       @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  choiceId    String
+  choice      GameScenarioChoice @relation(fields: [choiceId], references: [id], onDelete: Cascade)
+  role        GameRole
+  feedback    String
+  badgeAwarded String?
+  createdAt   DateTime           @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([role, createdAt(sort: Desc)])
+}
+
+model RecommendationEvent {
+  id        String             @id @default(cuid())
+  userId    String
+  user      UserProfile        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      RecommendationType
+  reason    String
+  priority  Int
+  createdAt DateTime           @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
