@@ -38,6 +38,11 @@ export interface EmotionCheckinResult {
   anonymousId: string;
   reflection: string;
   microAction: string;
+  safetySignal: {
+    hasDangerSignal: boolean;
+    matchedKeywords: string[];
+    suggestedAction: "none" | "open_sos";
+  };
   fallbackUsed: boolean;
   createdAt: string;
 }

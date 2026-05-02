@@ -36,6 +36,7 @@ Yêu cầu:
 - Mỗi tình huống có 3 lựa chọn.
 - Mỗi lựa chọn map vào role: supporter, bystander, defender.
 - Mỗi lựa chọn có feedback giáo dục ngắn gọn.
+- Feedback tập trung vào hành vi và bước sửa tiếp theo, không mắng hoặc gán nhãn xấu cho học sinh.
 - Trả về JSON thuần array, không chèn markdown.
 `;
 

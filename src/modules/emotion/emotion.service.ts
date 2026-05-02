@@ -1,7 +1,11 @@
 import { env } from "../../config/env";
 import { geminiClient } from "../../integrations/gemini/gemini.client";
 import type { EmotionReflectionResult } from "../../integrations/gemini/gemini.types";
-import { sanitizeText } from "../../shared/safety/content-filter";
+import {
+  extractDangerKeywords,
+  normalizeVietnameseText,
+  sanitizeText,
+} from "../../shared/safety/content-filter";
 import { hashValue } from "../../shared/utils/hash";
 import { resolveUserFromDevice } from "../session/session.service";
 import { emotionRepository } from "./emotion.repository";
@@ -86,15 +90,84 @@ const pickBySeed = (items: string[], seed: string): string => {
   return items[index];
 };
 
+type ReasonCategory =
+  | "peer_conflict"
+  | "school_pressure"
+  | "adult_feedback"
+  | "isolation"
+  | "safety_risk"
+  | "general";
+
+const reasonCategoryActions: Record<Exclude<ReasonCategory, "general">, string> = {
+  peer_conflict:
+    "Nếu an toàn, hãy nói ngắn gọn: mình không thích điều đó, rồi rời khỏi nhóm một lúc.",
+  school_pressure:
+    "Chọn một việc học nhỏ nhất để làm trong 10 phút, sau đó nghỉ ngắn.",
+  adult_feedback:
+    "Khi bình tĩnh hơn, hãy nói với người lớn: con muốn hiểu mình cần sửa điều gì.",
+  isolation:
+    "Thử bắt chuyện với một bạn bạn tin, hoặc nhờ giáo viên xếp nhóm hỗ trợ.",
+  safety_risk:
+    "Nếu đang nguy hiểm, hãy rời khỏi nơi đó và tìm người lớn đáng tin cậy hoặc gọi 111.",
+};
+
+const classifyReasonCategory = (input: EmotionCheckinInput): ReasonCategory => {
+  const reasonText = normalizeVietnameseText(
+    [...input.reasons, input.customReason ?? ""].join(" ")
+  );
+
+  if (extractDangerKeywords(reasonText).length > 0) {
+    return "safety_risk";
+  }
+
+  if (
+    ["trieu choc", "treu choc", "mau thuan", "cai nhau", "ban be"].some((keyword) =>
+      reasonText.includes(keyword)
+    )
+  ) {
+    return "peer_conflict";
+  }
+
+  if (
+    ["diem kem", "ap luc hoc", "bai kiem tra", "kiem tra", "bai tap"].some(
+      (keyword) => reasonText.includes(keyword)
+    )
+  ) {
+    return "school_pressure";
+  }
+
+  if (
+    ["co la", "thay la", "me la", "bo la", "phu huynh la", "bi phe binh"].some(
+      (keyword) => reasonText.includes(keyword)
+    )
+  ) {
+    return "adult_feedback";
+  }
+
+  if (
+    ["khong ai choi", "co lap", "bo roi", "mot minh", "khong co ban"].some(
+      (keyword) => reasonText.includes(keyword)
+    )
+  ) {
+    return "isolation";
+  }
+
+  return "general";
+};
+
 const buildRuleBasedReflection = (
   input: EmotionCheckinInput
 ): EmotionReflectionResult => {
   const fallback = fallbackContent[input.emotion];
   const reasonSeed = `${input.emotion}-${input.reasons.join("|")}-${input.customReason ?? ""}`;
+  const reasonCategory = classifyReasonCategory(input);
 
   return {
     reflection: pickBySeed(fallback.reflections, reasonSeed),
-    microAction: pickBySeed(fallback.actions, `${reasonSeed}-action`),
+    microAction:
+      reasonCategory === "general"
+        ? pickBySeed(fallback.actions, `${reasonSeed}-action`)
+        : reasonCategoryActions[reasonCategory],
   };
 };
 
@@ -143,12 +216,41 @@ const getWeekRange = (weekOffset: number): { startDate: Date; endDate: Date } =>
   return { startDate, endDate };
 };
 
-const dayLabels = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+const dayLabels = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
 
-const buildInsight = (counts: Record<EmotionValue, number>): string => {
+const getWeekdayIndex = (date: Date): number => (date.getDay() + 6) % 7;
+
+const emotionLabels: Record<EmotionValue, string> = {
+  happy: "vui",
+  sad: "buồn",
+  angry: "tức giận",
+  anxious: "lo lắng",
+  neutral: "bình thường",
+};
+
+const buildInsight = (
+  counts: Record<EmotionValue, number>,
+  dailyBuckets?: Array<{ day: string; total: number; topEmotion: EmotionValue }>
+): string => {
   const negative = counts.sad + counts.angry + counts.anxious;
 
   if (negative >= 4) {
+    const negativeDays =
+      dailyBuckets
+        ?.filter(
+          (bucket) =>
+            bucket.total > 0 &&
+            (bucket.topEmotion === "sad" ||
+              bucket.topEmotion === "angry" ||
+              bucket.topEmotion === "anxious")
+        )
+        .map((bucket) => bucket.day)
+        .slice(0, 3) ?? [];
+
+    if (negativeDays.length > 0) {
+      return `Tuần này cảm xúc tiêu cực xuất hiện nhiều vào ${negativeDays.join(", ")}. Bạn có thể thử chơi tình huống để luyện cách ứng phó.`;
+    }
+
     return "Tuần này cảm xúc tiêu cực xuất hiện nhiều. Bạn có thể thử chơi tình huống để luyện cách ứng phó.";
   }
 
@@ -172,18 +274,32 @@ export const emotionService = {
       customReason,
     };
 
+    const matchedDangerKeywords = Array.from(
+      new Set(extractDangerKeywords([...reasons, customReason ?? ""].join(" ")))
+    );
+    const hasDangerSignal = matchedDangerKeywords.length > 0;
     const { user, anonymousId } = await resolveUserFromDevice(input.deviceId);
 
     let reflection = buildRuleBasedReflection(normalizedInput);
     let fallbackUsed = true;
 
-    if (geminiClient.isEnabled()) {
+    if (geminiClient.isEnabled() && !hasDangerSignal) {
       try {
         reflection = await requestAiReflection(normalizedInput);
         fallbackUsed = false;
       } catch {
         fallbackUsed = true;
       }
+    }
+
+    if (hasDangerSignal) {
+      reflection = {
+        reflection:
+          "Điều bạn kể có dấu hiệu không an toàn. Bạn không cần tự xử lý một mình.",
+        microAction:
+          "Hãy rời khỏi nơi nguy hiểm, tìm người lớn đáng tin cậy hoặc gọi 111 nếu cần.",
+      };
+      fallbackUsed = true;
     }
 
     const created = await emotionRepository.create({
@@ -200,6 +316,11 @@ export const emotionService = {
       anonymousId,
       reflection: reflection.reflection,
       microAction: reflection.microAction,
+      safetySignal: {
+        hasDangerSignal,
+        matchedKeywords: matchedDangerKeywords,
+        suggestedAction: hasDangerSignal ? "open_sos" : "none",
+      },
       fallbackUsed,
       createdAt: created.createdAt.toISOString(),
     };
@@ -219,19 +340,38 @@ export const emotionService = {
       neutral: 0,
     };
 
-    const dailyBuckets = dayLabels.map((label) => ({
+    const dailyCounts = dayLabels.map((label) => ({
       day: label,
-      total: 0,
-      topEmotion: "neutral" as EmotionValue,
+      counts: {
+        happy: 0,
+        sad: 0,
+        angry: 0,
+        anxious: 0,
+        neutral: 0,
+      } satisfies Record<EmotionValue, number>,
     }));
 
     for (const entry of entries) {
       const emotion = prismaToEmotion[entry.emotion];
       counts[emotion] += 1;
 
-      const day = entry.createdAt.getDay();
-      dailyBuckets[day].total += 1;
+      const day = getWeekdayIndex(entry.createdAt);
+      dailyCounts[day].counts[emotion] += 1;
     }
+
+    const dailyBuckets = dailyCounts.map((bucket) => {
+      const sortedCounts = Object.entries(bucket.counts).sort((a, b) => b[1] - a[1]);
+      const topEmotion = (sortedCounts[0]?.[0] ?? "neutral") as EmotionValue;
+      const total = Object.values(bucket.counts).reduce((sum, count) => sum + count, 0);
+
+      return {
+        day: bucket.day,
+        total,
+        topEmotion,
+        topEmotionLabel: emotionLabels[topEmotion],
+        counts: bucket.counts,
+      };
+    });
 
     const dominantEmotion = (Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ??
       "neutral") as EmotionValue;
@@ -252,7 +392,7 @@ export const emotionService = {
         color: jarColor,
         fillPercent: jarFillPercent,
       },
-      insight: buildInsight(counts),
+      insight: buildInsight(counts, dailyBuckets),
       dailyBuckets,
     };
   },

@@ -96,6 +96,8 @@ suite("SafeMind prompt requirements", () => {
     expect(checkin.body.data.reflection.length).toBeGreaterThan(0);
     expect(typeof checkin.body.data.microAction).toBe("string");
     expect(checkin.body.data.microAction.length).toBeGreaterThan(0);
+    expect(checkin.body.data.safetySignal.hasDangerSignal).toBe(false);
+    expect(checkin.body.data.safetySignal.suggestedAction).toBe("none");
 
     const weekly = await requestJson(
       `/api/v1/emotions/weekly-stats?deviceId=${encodeURIComponent(deviceId)}&weekOffset=0`
@@ -106,6 +108,9 @@ suite("SafeMind prompt requirements", () => {
     expect(weekly.body.data.counts.angry).toBeGreaterThanOrEqual(1);
     expect(weekly.body.data.jar.fillPercent).toBeGreaterThan(0);
     expect(typeof weekly.body.data.insight).toBe("string");
+    expect(Array.isArray(weekly.body.data.dailyBuckets)).toBe(true);
+    expect(weekly.body.data.dailyBuckets.length).toBe(7);
+    expect(typeof weekly.body.data.dailyBuckets[0].topEmotion).toBe("string");
   });
 
   it("exposes root and health endpoints", async () => {
@@ -184,6 +189,38 @@ suite("SafeMind prompt requirements", () => {
     expect(byId.status).toBe(200);
     expect(byId.body.success).toBe(true);
     expect(byId.body.data.level).toBe("level3");
+  });
+
+  it("classifies accented Vietnamese SOS descriptions correctly", async () => {
+    const deviceId = uniqueDeviceId("sos-accent");
+
+    const level2 = await requestJson("/api/v1/sos/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId,
+        situation: "Các bạn nói xấu và cô lập mình trên nhóm lớp",
+      }),
+    });
+
+    expect(level2.status).toBe(200);
+    expect(level2.body.success).toBe(true);
+    expect(level2.body.data.level).toBe("level2");
+    expect(level2.body.data.showHotline).toBe(false);
+
+    const level3 = await requestJson("/api/v1/sos/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceId,
+        situation: "Có bạn đe dọa sẽ đánh mình và còn cầm dao",
+      }),
+    });
+
+    expect(level3.status).toBe(200);
+    expect(level3.body.success).toBe(true);
+    expect(level3.body.data.level).toBe("level3");
+    expect(level3.body.data.showHotline).toBe(true);
   });
 
   it("protects SOS report access by anonymous identity", async () => {
@@ -334,6 +371,42 @@ suite("SafeMind prompt requirements", () => {
     expect(recommendation.body.data.priority).toBe(1);
   });
 
+  it("escalates to SOS recommendation when negative journal entries contain danger signals", async () => {
+    const deviceId = uniqueDeviceId("orchestration-emotion-danger");
+
+    for (const customReason of [
+      "Mình sợ vì có bạn đe dọa đánh mình sau giờ học",
+      "Hôm nay mình lo vì bạn đó vẫn dọa đánh và ép mình đi theo",
+    ]) {
+      const checkin = await requestJson("/api/v1/emotions/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId,
+          emotion: "anxious",
+          reasons: ["mâu thuẫn với bạn"],
+          customReason,
+        }),
+      });
+
+      expect(checkin.status).toBe(200);
+      expect(checkin.body.success).toBe(true);
+      expect(checkin.body.data.safetySignal.hasDangerSignal).toBe(true);
+      expect(checkin.body.data.safetySignal.suggestedAction).toBe("open_sos");
+    }
+
+    const recommendation = await requestJson(
+      `/api/v1/user/recommendations?deviceId=${encodeURIComponent(deviceId)}`
+    );
+
+    expect(recommendation.status).toBe(200);
+    expect(recommendation.body.success).toBe(true);
+    expect(recommendation.body.data.nextRecommendation).toBe("sos_check");
+    expect(recommendation.body.data.priority).toBe(1);
+    expect(recommendation.body.data.signals.hasEmotionDangerSignal).toBe(true);
+    expect(recommendation.body.data.signals.emotionDangerKeywords.length).toBeGreaterThan(0);
+  });
+
   it("returns emotion history list for a device", async () => {
     const deviceId = uniqueDeviceId("emotion-history");
 
@@ -400,6 +473,7 @@ suite("SafeMind prompt requirements", () => {
       expect(typeof checkin.body.data.microAction).toBe("string");
       expect(checkin.body.data.reflection.length).toBeGreaterThan(0);
       expect(checkin.body.data.microAction.length).toBeGreaterThan(0);
+      expect(checkin.body.data.safetySignal.hasDangerSignal).toBe(false);
     } finally {
       geminiClient.isEnabled = originalIsEnabled;
       geminiClient.generateEmotionReflection = originalGenerate;

@@ -1,6 +1,7 @@
 import { AppError } from "../../shared/http/errors";
 import {
   extractDangerKeywords,
+  normalizeVietnameseText,
   sanitizeText,
 } from "../../shared/safety/content-filter";
 import { resolveUserFromDevice } from "../session/session.service";
@@ -9,6 +10,9 @@ import { prismaToSos, sosToPrisma, type SosLevelValue } from "./sos.types";
 
 const level3Keywords = [
   "danh",
+  "bi danh",
+  "dam",
+  "tat",
   "hanh hung",
   "de doa",
   "dao",
@@ -17,6 +21,7 @@ const level3Keywords = [
   "giet",
   "bat coc",
   "ep buoc",
+  "xam hai",
 ];
 
 const level2Keywords = [
@@ -28,6 +33,9 @@ const level2Keywords = [
   "truy tim",
   "bat nat",
   "lang ma",
+  "che bai",
+  "boc phot",
+  "phat tan",
 ];
 
 const classifySos = (
@@ -38,7 +46,7 @@ const classifySos = (
   matchedKeywords: string[];
   showHotline: boolean;
 } => {
-  const normalized = situation.toLowerCase();
+  const normalized = normalizeVietnameseText(situation);
   const danger = new Set<string>(extractDangerKeywords(normalized));
 
   for (const keyword of level3Keywords) {

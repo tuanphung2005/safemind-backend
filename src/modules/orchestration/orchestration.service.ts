@@ -5,6 +5,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "../../config/db";
+import { extractDangerKeywords } from "../../shared/safety/content-filter";
 import { resolveUserFromDevice } from "../session/session.service";
 
 type RecommendationValue = "play_game" | "sos_check" | "micro_action" | "none";
@@ -56,14 +57,24 @@ export const orchestrationService = {
       }),
     ]);
 
-    const negativeCount = emotions.filter(
+    const negativeEmotions = emotions.filter(
       (entry) =>
         entry.emotion === PrismaEmotion.SAD ||
         entry.emotion === PrismaEmotion.ANGRY ||
         entry.emotion === PrismaEmotion.ANXIOUS
-    ).length;
+    );
+    const negativeCount = negativeEmotions.length;
+    const emotionDangerKeywords = Array.from(
+      new Set(
+        negativeEmotions.flatMap((entry) =>
+          extractDangerKeywords([...entry.reasons, entry.customReason ?? ""].join(" "))
+        )
+      )
+    );
 
     const hasLevel3 = sosReports.some((report) => report.level === PrismaSosLevel.LEVEL3);
+    const hasEmotionDangerSignal =
+      emotionDangerKeywords.length > 0 && negativeCount >= 2;
     const daysSinceLastGame = latestGame
       ? Math.floor((Date.now() - latestGame.createdAt.getTime()) / (1000 * 60 * 60 * 24))
       : 999;
@@ -72,9 +83,11 @@ export const orchestrationService = {
     let reason = "Bạn đang giữ nhịp ổn định. Hãy tiếp tục check-in mỗi ngày.";
     let priority = 3;
 
-    if (hasLevel3) {
+    if (hasLevel3 || hasEmotionDangerSignal) {
       nextRecommendation = "sos_check";
-      reason = "Hệ thống nhận thấy dấu hiệu nguy cơ cao. Hãy ưu tiên tìm người lớn đáng tin cậy và dùng SOS khi cần.";
+      reason = hasLevel3
+        ? "Hệ thống nhận thấy dấu hiệu nguy cơ cao. Hãy ưu tiên tìm người lớn đáng tin cậy và dùng SOS khi cần."
+        : "Nhật ký gần đây có cảm xúc tiêu cực kèm dấu hiệu không an toàn. Hãy ưu tiên tìm người lớn đáng tin cậy hoặc mở SOS.";
       priority = 1;
     } else if (negativeCount >= 4) {
       nextRecommendation = "play_game";
@@ -103,6 +116,8 @@ export const orchestrationService = {
       signals: {
         negativeCount7d: negativeCount,
         hasLevel3Signal: hasLevel3,
+        hasEmotionDangerSignal,
+        emotionDangerKeywords,
         daysSinceLastGame,
       },
     };
