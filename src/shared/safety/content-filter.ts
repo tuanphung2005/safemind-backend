@@ -23,23 +23,26 @@ export const sanitizeText = (value: string, maxLength = 500): string => {
 
 const dangerKeywords = [
   "dao",
-  "sung",
-  "danh",
-  "bi danh",
-  "dam",
-  "tat",
-  "hanh hung",
-  "de doa",
-  "tu sat",
-  "giet",
-  "bat coc",
-  "ep buoc",
-  "xam hai",
+  "súng",
+  "đánh",
+  "bị đánh",
+  "đâm",
+  "tát",
+  "hành hung",
+  "đe dọa",
+  "tự sát",
+  "giết",
+  "bắt cóc",
+  "ép buộc",
+  "xâm hại",
+  "quấy rối",
 ];
 
 export const extractDangerKeywords = (input: string): string[] => {
   const normalized = normalizeVietnameseText(sanitizeText(input));
-  return dangerKeywords.filter((keyword) => normalized.includes(keyword));
+  return dangerKeywords.filter((keyword) =>
+    normalized.includes(normalizeVietnameseText(keyword))
+  );
 };
 
 export const hasDangerSignal = (input: string): boolean =>
