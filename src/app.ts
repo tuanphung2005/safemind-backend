@@ -1,3 +1,4 @@
+import { swagger } from "@elysiajs/swagger";
 import { Elysia } from "elysia";
 
 import { emotionRoutes } from "./modules/emotion/emotion.routes";
@@ -19,6 +20,7 @@ export const createApp = () => {
     .use(orchestrationRoutes);
 
   return new Elysia()
+    .use(swagger())
     .get("/", () =>
       ok({
         service: "safemind-backend",
